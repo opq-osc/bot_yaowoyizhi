@@ -1,17 +1,21 @@
-from ctypes import resize
-from hoshino import Service, aiorequests
-from PIL import Image, ImageDraw, ImageFont
+"""图片套娃
+1. 发送  要我一直+{图片}
+2. 发送 套娃 {文字1} {图片} {文字2}
+文字1和文字2都是可选的
+"""
 from io import BytesIO
-from hoshino.util import pic2b64
-from hoshino.typing import *
-import re
-import base64
-import os
+from pathlib import Path
 
-sv = Service('套娃')
+import httpx
+from botoy import GroupMsg, S, decorators
+from botoy.parser import group as gp
+from PIL import Image, ImageDraw, ImageFont
+
+FONT_PATH = str(Path(__file__).parent.absolute() / "msyh.ttc")
 
 
-def img_gen(inp, word1='要我一直', word2=f'吗'):
+def img_gen(inp, word1="要我一直", word2=f"吗"):
+    print(f"{word1=} {word2=}")
     ori = inp.size[0]
 
     # 输入图
@@ -26,14 +30,16 @@ def img_gen(inp, word1='要我一直', word2=f'吗'):
     # 输出图
     outp_x = inp_x
     outp_y = inp_y + word_y
-    outp = Image.new('RGBA', (outp_x, outp_y), (255, 255, 255, 255))
+    outp = Image.new("RGBA", (outp_x, outp_y), (255, 255, 255, 255))
     outp.paste(inp, (0, 0))
 
     # 贴字
-    font = ImageFont.truetype(os.path.join(os.path.dirname(__file__), 'msyh.ttc'), 100)
+    font = ImageFont.truetype(FONT_PATH, 100)
     outp_draw = ImageDraw.Draw(outp)
     outp_draw.text((0, inp_y), word1, (0, 0, 0, 255), font)
-    outp_draw.text((int(outp_x / le * (le - len(word2))), inp_y), word2, (0, 0, 0, 255), font)
+    outp_draw.text(
+        (int(outp_x / le * (le - len(word2))), inp_y), word2, (0, 0, 0, 255), font
+    )
 
     # 小图长宽
     outp_small_x = outp_x
@@ -74,45 +80,43 @@ def img_gen(inp, word1='要我一直', word2=f'吗'):
     return outp
 
 
-async def get_pic(bot, ev):
-    match = re.search(r"\[CQ:image,file=(.*),url=(.*)\]", str(ev.message))
-    if not match:
-        return
-    resp = await aiorequests.get(match.group(2))
-    resp_cont = await resp.content
+def get_pic(pic_url):
+    resp_cont = httpx.get(pic_url, timeout=10).content
     pic = Image.open(BytesIO(resp_cont)).convert("RGBA")
     return pic
 
 
-async def send(bot, ev, pic):
-    buf = BytesIO()
-    img = pic.convert('RGB')
-    img.save(buf, format='JPEG')
-    base64_str = f'base64://{base64.b64encode(buf.getvalue()).decode()}'
-    await bot.send(ev, f'[CQ:image,file={base64_str}]')
+def yaowoyizhi(pic_url, word1="要我一直", word2="吗"):
+    img = img_gen(get_pic(pic_url), word1, word2)
+    b = BytesIO()
+
+    img = img.convert("RGB")
+    img.save(b, format="JPEG")
+    return b
 
 
-@sv.on_prefix(('要我一直'))
-async def ywyz(bot, ev):
-    pic = await get_pic(bot, ev)
-    if pic == None:
+@decorators.ignore_botself
+def receive_group_msg(ctx: GroupMsg):
+    pic_data = gp.pic(ctx)
+    if not pic_data:
         return
-    pic = img_gen(pic)
-    await send(bot, ev, pic)
 
+    text = pic_data.Content.strip().replace("\r", " ")  # qq出来有时候有这玩意儿
+    pic_url = pic_data.GroupPic[0].Url
 
-@sv.on_prefix(('套娃'))
-async def ywyz(bot, ev):
-    pic = await get_pic(bot, ev)
-    if pic == None:
-        return
-    text = ev.message.extract_plain_text().strip().split(' ')
-    text = list(filter(lambda x: x != "", text))
-    print(text)
-    if len(text) == 0:
-        pic = img_gen(pic)
-    elif len(text) >= 2:
-        pic = img_gen(pic, text[0], text[1])
-    else:
-        pic = img_gen(pic, text[0], "")
-    await send(bot, ev, pic)
+    pic = None
+
+    if text.startswith("要我一直"):
+        pic = yaowoyizhi(pic_url)
+
+    elif text.startswith("套娃"):
+        items = [i.strip() for i in text[2:].split(" ") if i]
+        if len(items) == 0:
+            pic = yaowoyizhi(pic_url)
+        elif len(items) == 1:
+            pic = yaowoyizhi(pic_url, items[0], "")
+        else:
+            pic = yaowoyizhi(pic_url, items[0], items[1])
+
+    if pic:
+        S.image(pic)
