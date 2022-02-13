@@ -15,7 +15,6 @@ FONT_PATH = str(Path(__file__).parent.absolute() / "msyh.ttc")
 
 
 def img_gen(inp, word1="要我一直", word2=f"吗"):
-    print(f"{word1=} {word2=}")
     ori = inp.size[0]
 
     # 输入图
